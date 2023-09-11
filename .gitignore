@@ -2,7 +2,13 @@
 __pycache__/
 *.py[cod]
 *$py.class
+Autoformer/test_results/*
+Autoformer/checkpoints/*
+Autoformer/results/*
+Autoformer/datasets/*
+lightning_logs/*
 
+.idea/*
 # C extensions
 *.so
 
