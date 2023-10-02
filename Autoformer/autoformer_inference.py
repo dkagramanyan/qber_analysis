@@ -253,3 +253,73 @@ class Autoformer(nn.Module):
         else:
             return dec_out[:, -self.pred_len:, :]  # [B, L, D]
 
+def preprocess_autoformer(df_raw, seq_len, label_len,pred_len, device, embed='timeF', target='e_mu_current',freq='t', step=60):
+
+    timeenc = 0 if embed != 'timeF' else 1
+
+    cols = list(df_raw.columns)
+    cols.remove(target)
+    cols.remove('date')
+
+    df_raw = df_raw[['date'] + cols + [target]]
+    border1 = len(df_raw) - seq_len
+    border2 = len(df_raw)
+
+    cols_data = df_raw.columns[1:]
+    df_data = df_raw[cols_data]
+
+    data = df_data.values
+
+    tmp_stamp = df_raw[['date']][border1:border2]
+    tmp_stamp['date'] = pd.to_datetime(tmp_stamp.date)
+    pred_dates = pd.date_range(tmp_stamp.date.values[-1], periods=pred_len + 1, freq=freq)
+
+    df_stamp = pd.DataFrame(columns=['date'])
+    df_stamp.date = list(tmp_stamp.date.values) + list(pred_dates[1:])
+
+    if timeenc == 0:
+        df_stamp['month'] = df_stamp.date.apply(lambda row: row.month, 1)
+        df_stamp['day'] = df_stamp.date.apply(lambda row: row.day, 1)
+        df_stamp['weekday'] = df_stamp.date.apply(lambda row: row.weekday(), 1)
+        df_stamp['hour'] = df_stamp.date.apply(lambda row: row.hour, 1)
+        data_stamp = df_stamp.drop(['date'], 1).values
+    elif timeenc == 1:
+        data_stamp = time_features(pd.to_datetime(df_stamp['date'].values), freq=freq)
+        data_stamp = data_stamp.transpose(1, 0)
+
+    data_x = data[border1:border2]
+    data_y = data[border1:border2]
+
+    s_begin = 0
+    s_end = s_begin + seq_len
+    r_begin = s_end - label_len
+    r_end = r_begin + label_len + pred_len
+
+    seq_x = data_x[s_begin:s_end]
+    seq_y = data_y[r_begin:r_begin + label_len]
+    seq_x_mark = data_stamp[s_begin:s_end]
+    seq_y_mark = data_stamp[r_begin:r_end]
+
+    batch_x = torch.FloatTensor(seq_x).unsqueeze(0).to(device)
+    batch_y = torch.FloatTensor(seq_y).unsqueeze(0).to(device)
+    batch_x_mark = torch.FloatTensor(seq_x_mark).unsqueeze(0).to(device)
+    batch_y_mark = torch.FloatTensor(seq_y_mark).unsqueeze(0).to(device)
+
+    dec_inp = torch.zeros_like(batch_y[:, -pred_len:, :]).float()
+    dec_inp = torch.cat([batch_y[:, :label_len, :], dec_inp], dim=1).float().to(device)
+
+    return batch_x, batch_x_mark, dec_inp, batch_y_mark
+
+def autoformer_predict(model, df_tmp, pred_len=3, f_dim=-1,seq_len=96,label_len=48, output_attention=True,device='cuda'):
+
+    batch_x, batch_x_mark, dec_inp, batch_y_mark = preprocess_autoformer(df_tmp,seq_len, label_len,pred_len, device=device)
+
+    outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+
+    if output_attention:
+        outputs = outputs[0]
+
+    outputs = outputs[:, -pred_len:, f_dim:]
+    pred = outputs.detach().cpu().numpy()[0]
+
+    return pred[-pred_len:]
